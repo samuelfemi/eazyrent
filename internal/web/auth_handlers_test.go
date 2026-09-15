@@ -13,7 +13,9 @@ import (
 	"time"
 
 	"github.com/femi/golang-easyrent/internal/auth"
+	"github.com/femi/golang-easyrent/internal/favorite"
 	"github.com/femi/golang-easyrent/internal/listing"
+	"github.com/femi/golang-easyrent/internal/ratelimit"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
@@ -40,7 +42,7 @@ func testHandler(t *testing.T) (Handler, *sql.DB) {
 		auth.EmailSender{},
 		30*24*time.Hour,
 	)
-	return NewHandler(svc, listing.NewService(listing.NewStore(db))), db
+	return NewHandler(svc, listing.NewService(listing.NewStore(db)), favorite.NewService(favorite.NewStore(db)), ratelimit.DefaultLimits()), db
 }
 
 func doJSON(t *testing.T, mux http.Handler, method, target, body, authHeader string) *httptest.ResponseRecorder {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -37,8 +38,6 @@ func openTestDB(t *testing.T) *sql.DB {
 	return db
 }
 
-// testLandlord creates a verified user to own listings, cleaning it up
-// (listings cascade) when the test ends.
 func testLandlord(t *testing.T, db *sql.DB, tag string) auth.User {
 	t.Helper()
 
@@ -84,8 +83,6 @@ func createListing(t *testing.T, svc Service, landlordID uuid.UUID, title string
 	return l
 }
 
-// TestListingLifecycle mirrors the TS create/get/update/forbidden/delete
-// cases end to end against the real database.
 func TestListingLifecycle(t *testing.T) {
 	db := openTestDB(t)
 	ctx := context.Background()
@@ -165,8 +162,6 @@ func TestListingLifecycle(t *testing.T) {
 
 func strptr(s string) *string { return &s }
 
-// TestListingMedia covers add/delete media and the cover image on list
-// queries.
 func TestListingMedia(t *testing.T) {
 	db := openTestDB(t)
 	ctx := context.Background()
@@ -229,8 +224,6 @@ func TestListingMedia(t *testing.T) {
 	}
 }
 
-// TestListingFindAll covers pagination, status/furnished/rooms/price
-// filters and text search.
 func TestListingFindAll(t *testing.T) {
 	db := openTestDB(t)
 	ctx := context.Background()
@@ -239,22 +232,30 @@ func TestListingFindAll(t *testing.T) {
 	t.Cleanup(func() {
 		_, _ = db.ExecContext(context.Background(), `DELETE FROM listings WHERE landlord_id = $1`, landlord.ID)
 	})
+	prefix := fmt.Sprintf("FindAll%d", time.Now().UnixNano())
 
 	furnished := true
-	a := createListing(t, svc, landlord.ID, "Lekki Luxury Duplex")
+	a := createListing(t, svc, landlord.ID, prefix+" Lekki Luxury Duplex")
 	if _, err := svc.UpdateStatus(ctx, a.ID, landlord.ID, "rented"); err != nil {
 		t.Fatalf("UpdateStatus: %v", err)
 	}
 	b, err := svc.Create(ctx, CreateListingParams{
-		LandlordID: landlord.ID, Title: "Ikeja Mini Flat", Description: "Cozy place near the GRA",
+		LandlordID: landlord.ID, Title: prefix + " Ikeja Mini Flat", Description: "Cozy place near the GRA",
 		Price: "80000", Rooms: 1, Furnished: true, Latitude: 6.60, Longitude: 3.35, Address: "Ikeja GRA",
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	createListing(t, svc, landlord.ID, "Surulere Room")
+	c, err := svc.Create(ctx, CreateListingParams{
+		LandlordID: landlord.ID, Title: prefix + " Surulere Room", Description: "Room with parking space",
+		Price: "120000", Rooms: 3, Furnished: false, Latitude: 6.50, Longitude: 3.35, Address: "Surulere",
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	_ = c
 
-	rented, err := svc.GetAll(ctx, 1, 10, Filters{Status: "rented"})
+	rented, err := svc.GetAll(ctx, 1, 10, Filters{Status: "rented", Search: prefix})
 	if err != nil {
 		t.Fatalf("GetAll status: %v", err)
 	}
@@ -262,7 +263,7 @@ func TestListingFindAll(t *testing.T) {
 		t.Fatalf("status filter: got %+v", rented)
 	}
 
-	furn, err := svc.GetAll(ctx, 1, 10, Filters{Furnished: &furnished})
+	furn, err := svc.GetAll(ctx, 1, 10, Filters{Furnished: &furnished, Search: prefix})
 	if err != nil {
 		t.Fatalf("GetAll furnished: %v", err)
 	}
@@ -270,7 +271,7 @@ func TestListingFindAll(t *testing.T) {
 		t.Fatalf("furnished filter: got %+v", furn)
 	}
 
-	search, err := svc.GetAll(ctx, 1, 10, Filters{Search: "lekki"})
+	search, err := svc.GetAll(ctx, 1, 10, Filters{Search: strings.ToLower(prefix) + " lekki"})
 	if err != nil {
 		t.Fatalf("GetAll search: %v", err)
 	}
@@ -279,7 +280,7 @@ func TestListingFindAll(t *testing.T) {
 	}
 
 	minPrice, maxPrice := 90000.0, 130000.0
-	priced, err := svc.GetAll(ctx, 1, 10, Filters{MinPrice: &minPrice, MaxPrice: &maxPrice})
+	priced, err := svc.GetAll(ctx, 1, 10, Filters{MinPrice: &minPrice, MaxPrice: &maxPrice, Search: prefix})
 	if err != nil {
 		t.Fatalf("GetAll price: %v", err)
 	}
@@ -288,7 +289,7 @@ func TestListingFindAll(t *testing.T) {
 	}
 
 	rooms := 3
-	roomed, err := svc.GetAll(ctx, 1, 10, Filters{Rooms: &rooms})
+	roomed, err := svc.GetAll(ctx, 1, 10, Filters{Rooms: &rooms, Search: prefix})
 	if err != nil {
 		t.Fatalf("GetAll rooms: %v", err)
 	}
@@ -296,11 +297,11 @@ func TestListingFindAll(t *testing.T) {
 		t.Fatalf("rooms=3 should match 2, got %d", roomed.Total)
 	}
 
-	p1, err := svc.GetAll(ctx, 1, 2, Filters{})
+	p1, err := svc.GetAll(ctx, 1, 2, Filters{Search: prefix})
 	if err != nil {
 		t.Fatalf("GetAll page 1: %v", err)
 	}
-	p2, err := svc.GetAll(ctx, 2, 2, Filters{})
+	p2, err := svc.GetAll(ctx, 2, 2, Filters{Search: prefix})
 	if err != nil {
 		t.Fatalf("GetAll page 2: %v", err)
 	}
@@ -312,7 +313,6 @@ func TestListingFindAll(t *testing.T) {
 	}
 }
 
-// TestListingFindByLandlord scopes rows to the owning landlord.
 func TestListingFindByLandlord(t *testing.T) {
 	db := openTestDB(t)
 	ctx := context.Background()
@@ -342,7 +342,6 @@ func TestListingFindByLandlord(t *testing.T) {
 	}
 }
 
-// TestNormalizePagination is a pure unit test: clamping without a database.
 func TestNormalizePagination(t *testing.T) {
 	tests := []struct {
 		name      string

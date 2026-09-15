@@ -26,7 +26,9 @@ import (
 	"github.com/femi/golang-easyrent/internal/auth"
 	"github.com/femi/golang-easyrent/internal/config"
 	"github.com/femi/golang-easyrent/internal/db"
+	"github.com/femi/golang-easyrent/internal/favorite"
 	"github.com/femi/golang-easyrent/internal/listing"
+	"github.com/femi/golang-easyrent/internal/ratelimit"
 	"github.com/femi/golang-easyrent/internal/web"
 )
 
@@ -53,11 +55,16 @@ func run() error {
 	authSvc := auth.NewService(
 		auth.NewStore(pool),
 		auth.Tokens{Secret: []byte(cfg.AccessTokenSecret), AccessTTL: cfg.AccessTokenTTL},
-		auth.EmailSender{},
+		auth.EmailSender{APIKey: cfg.BrevoAPIKey, From: cfg.EmailFrom, AppURL: cfg.FrontendURL},
 		cfg.RefreshTokenTTL,
 	)
 
-	handler := web.NewHandler(authSvc, listing.NewService(listing.NewStore(pool)))
+	handler := web.NewHandler(
+		authSvc,
+		listing.NewService(listing.NewStore(pool)),
+		favorite.NewService(favorite.NewStore(pool)),
+		ratelimit.DefaultLimits(),
+	)
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,

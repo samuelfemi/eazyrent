@@ -7,11 +7,13 @@ import (
 	"testing"
 
 	"github.com/femi/golang-easyrent/internal/auth"
+	"github.com/femi/golang-easyrent/internal/favorite"
 	"github.com/femi/golang-easyrent/internal/listing"
+	"github.com/femi/golang-easyrent/internal/ratelimit"
 )
 
 func TestHealth(t *testing.T) {
-	h := NewHandler(auth.Service{}, listing.Service{})
+	h := NewHandler(auth.Service{}, listing.Service{}, favorite.Service{}, ratelimit.DefaultLimits())
 
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	rec := httptest.NewRecorder()

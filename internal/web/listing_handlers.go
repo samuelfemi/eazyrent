@@ -146,10 +146,18 @@ func pathListingID(r *http.Request) (uuid.UUID, error) {
 	return id, nil
 }
 
+// maxPrice mirrors listings.price NUMERIC(14,2): anything larger is a
+// typo, and rejecting it here turns a DB overflow 500 into a 400.
+const maxPrice = 999999999999.99
+
 func parsePrice(s string) error {
+	s = strings.ReplaceAll(strings.TrimSpace(s), ",", "")
 	n, err := strconv.ParseFloat(s, 64)
 	if err != nil || n < 0 {
 		return errors.New("price must be a positive number")
+	}
+	if n > maxPrice {
+		return errors.New("price is too large (max 999,999,999,999.99)")
 	}
 	return nil
 }
@@ -223,6 +231,7 @@ func (r createListingRequest) validate() error {
 //	@Success		201		{object}	listingResponse
 //	@Failure		400		{object}	errorResponse
 //	@Failure		401		{object}	errorResponse
+//	@Failure		429		{object}	errorResponse
 //	@Router			/listings [post]
 func (h Handler) createListing(w http.ResponseWriter, r *http.Request) {
 	cu, ok := CurrentUserOf(r)
@@ -256,7 +265,7 @@ func (h Handler) createListing(w http.ResponseWriter, r *http.Request) {
 		Address:     req.Address,
 	})
 	if err != nil {
-		writeServiceError(w, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, toListingResponse(l))
@@ -272,6 +281,7 @@ func (h Handler) createListing(w http.ResponseWriter, r *http.Request) {
 //	@Success		200	{object}	listingDetailResponse
 //	@Failure		400	{object}	errorResponse
 //	@Failure		404	{object}	errorResponse
+//	@Failure		429	{object}	errorResponse
 //	@Router			/listings/{id} [get]
 func (h Handler) getListing(w http.ResponseWriter, r *http.Request) {
 	id, err := pathListingID(r)
@@ -282,7 +292,7 @@ func (h Handler) getListing(w http.ResponseWriter, r *http.Request) {
 
 	d, err := h.Listings.GetByID(r.Context(), id)
 	if err != nil {
-		writeServiceError(w, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, toDetailResponse(d))
@@ -378,6 +388,7 @@ func parseFilters(r *http.Request) (listing.Filters, error) {
 //	@Param			search		query		string	false	"Title, address and description search"
 //	@Success		200			{object}	listingPageResponse
 //	@Failure		400			{object}	errorResponse
+//	@Failure		429			{object}	errorResponse
 //	@Router			/listings [get]
 func (h Handler) listListings(w http.ResponseWriter, r *http.Request) {
 	page, limit, err := parsePageQuery(r)
@@ -393,7 +404,7 @@ func (h Handler) listListings(w http.ResponseWriter, r *http.Request) {
 
 	p, err := h.Listings.GetAll(r.Context(), page, limit, filters)
 	if err != nil {
-		writeServiceError(w, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, toPageResponse(p))
@@ -427,7 +438,7 @@ func (h Handler) myListings(w http.ResponseWriter, r *http.Request) {
 
 	p, err := h.Listings.GetMyListings(r.Context(), cu.UserID, page, limit)
 	if err != nil {
-		writeServiceError(w, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, toPageResponse(p))
@@ -543,7 +554,7 @@ func (h Handler) updateListing(w http.ResponseWriter, r *http.Request) {
 
 	l, err := h.Listings.Update(r.Context(), id, cu.UserID, req.params())
 	if err != nil {
-		writeServiceError(w, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, toListingResponse(l))
@@ -575,7 +586,7 @@ func (h Handler) deleteListing(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.Listings.Delete(r.Context(), id, cu.UserID); err != nil {
-		writeServiceError(w, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -625,7 +636,7 @@ func (h Handler) updateListingStatus(w http.ResponseWriter, r *http.Request) {
 
 	l, err := h.Listings.UpdateStatus(r.Context(), id, cu.UserID, req.Status)
 	if err != nil {
-		writeServiceError(w, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, toListingResponse(l))
@@ -686,7 +697,7 @@ func (h Handler) addMedia(w http.ResponseWriter, r *http.Request) {
 
 	m, err := h.Listings.AddMedia(r.Context(), id, cu.UserID, req.URL, req.Type, req.Order)
 	if err != nil {
-		writeServiceError(w, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, toMediaResponse(m))

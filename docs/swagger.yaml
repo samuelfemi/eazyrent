@@ -418,6 +418,110 @@ paths:
       summary: Verify email
       tags:
       - auth
+  /favorites:
+    get:
+      description: Paginated favorite listings of the authenticated user, newest favorite
+        first.
+      parameters:
+      - description: Page
+        in: query
+        name: page
+        type: integer
+      - description: Page size (1-100)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/web.listingPageResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/web.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/web.errorResponse'
+        "429":
+          description: Too Many Requests
+          schema:
+            $ref: '#/definitions/web.errorResponse'
+      security:
+      - Bearer: []
+      summary: List favorites
+      tags:
+      - favorites
+  /favorites/{id}:
+    delete:
+      description: Remove a listing from the caller's favorites. Idempotent.
+      parameters:
+      - description: Listing ID
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/web.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/web.errorResponse'
+        "429":
+          description: Too Many Requests
+          schema:
+            $ref: '#/definitions/web.errorResponse'
+      security:
+      - Bearer: []
+      summary: Remove favorite
+      tags:
+      - favorites
+    post:
+      description: Save a listing to the caller's favorites. Idempotent.
+      parameters:
+      - description: Listing ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/web.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/web.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/web.errorResponse'
+        "429":
+          description: Too Many Requests
+          schema:
+            $ref: '#/definitions/web.errorResponse'
+      security:
+      - Bearer: []
+      summary: Add favorite
+      tags:
+      - favorites
   /listings:
     get:
       description: Public paginated listing search with filters.
@@ -469,6 +573,10 @@ paths:
           description: Bad Request
           schema:
             $ref: '#/definitions/web.errorResponse'
+        "429":
+          description: Too Many Requests
+          schema:
+            $ref: '#/definitions/web.errorResponse'
       summary: List listings
       tags:
       - listings
@@ -496,6 +604,10 @@ paths:
             $ref: '#/definitions/web.errorResponse'
         "401":
           description: Unauthorized
+          schema:
+            $ref: '#/definitions/web.errorResponse'
+        "429":
+          description: Too Many Requests
           schema:
             $ref: '#/definitions/web.errorResponse'
       security:
@@ -557,6 +669,10 @@ paths:
             $ref: '#/definitions/web.errorResponse'
         "404":
           description: Not Found
+          schema:
+            $ref: '#/definitions/web.errorResponse'
+        "429":
+          description: Too Many Requests
           schema:
             $ref: '#/definitions/web.errorResponse'
       summary: Get listing

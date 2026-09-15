@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/femi/golang-easyrent/internal/auth"
+	"github.com/femi/golang-easyrent/internal/ratelimit"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
@@ -66,6 +67,25 @@ func TestCreateListingNumericPrice(t *testing.T) {
 	rec = doJSON(t, mux, http.MethodPatch, "/listings/"+created.ID, `{"price":4000000}`, owner)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("patch with numeric price: want 200, got %d (%s)", rec.Code, rec.Body.String())
+	}
+}
+
+// TestListRateLimit proves the list endpoint trips to 429 with a
+// Retry-After hint once its budget is spent.
+func TestListRateLimit(t *testing.T) {
+	h, _ := testHandler(t)
+	h.Limits.List = ratelimit.NewLimiter(time.Hour, 1)
+	mux := h.Routes()
+
+	if rec := doJSON(t, mux, http.MethodGet, "/listings", "", ""); rec.Code != http.StatusOK {
+		t.Fatalf("first list: want 200, got %d", rec.Code)
+	}
+	rec := doJSON(t, mux, http.MethodGet, "/listings", "", "")
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("second list: want 429, got %d", rec.Code)
+	}
+	if rec.Header().Get("Retry-After") == "" {
+		t.Fatal("429 should carry a Retry-After header")
 	}
 }
 

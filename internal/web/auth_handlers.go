@@ -3,6 +3,7 @@ package web
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"net/mail"
 	"net/url"
@@ -38,9 +39,11 @@ func errorStatus(err error) int {
 	}
 }
 
-func writeServiceError(w http.ResponseWriter, err error) {
+func writeServiceError(w http.ResponseWriter, r *http.Request, err error) {
 	status := errorStatus(err)
 	if status == http.StatusInternalServerError {
+		// Logged server-side only; the client keeps the generic message.
+		log.Printf("web: internal error %s %s: %v", r.Method, r.URL.Path, err)
 		writeError(w, status, "internal error")
 		return
 	}
@@ -98,7 +101,7 @@ func (h Handler) signUp(w http.ResponseWriter, r *http.Request) {
 
 	tokens, err := h.AuthSvc.SignUp(r.Context(), req.Email, req.Password, req.Phone, req.FullName)
 	if err != nil {
-		writeServiceError(w, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, tokens)
@@ -136,7 +139,7 @@ func (h Handler) signIn(w http.ResponseWriter, r *http.Request) {
 
 	tokens, err := h.AuthSvc.SignIn(r.Context(), req.Email, req.Password)
 	if err != nil {
-		writeServiceError(w, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, tokens)
@@ -171,7 +174,7 @@ func (h Handler) refresh(w http.ResponseWriter, r *http.Request) {
 
 	tokens, err := h.AuthSvc.Refresh(r.Context(), strings.TrimSpace(req.RefreshToken))
 	if err != nil {
-		writeServiceError(w, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, tokens)
@@ -200,7 +203,7 @@ func (h Handler) signOut(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.AuthSvc.SignOut(r.Context(), strings.TrimSpace(req.RefreshToken)); err != nil {
-		writeServiceError(w, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -225,7 +228,7 @@ func (h Handler) verifyEmail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.AuthSvc.VerifyEmail(r.Context(), token); err != nil {
-		writeServiceError(w, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "verified"})
@@ -280,7 +283,7 @@ func (h Handler) me(w http.ResponseWriter, r *http.Request) {
 
 	user, err := h.AuthSvc.Users.FindByID(r.Context(), cu.UserID)
 	if err != nil {
-		writeServiceError(w, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, toUserResponse(user))
@@ -327,13 +330,13 @@ func (h Handler) updateAvatar(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.AuthSvc.Users.UpdateAvatar(r.Context(), cu.UserID, req.AvatarURL); err != nil {
-		writeServiceError(w, err)
+		writeServiceError(w, r, err)
 		return
 	}
 
 	user, err := h.AuthSvc.Users.FindByID(r.Context(), cu.UserID)
 	if err != nil {
-		writeServiceError(w, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, toUserResponse(user))
@@ -367,7 +370,7 @@ func (h Handler) forgotPassword(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.AuthSvc.RequestPasswordReset(r.Context(), req.Email); err != nil {
-		writeServiceError(w, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "if the email is registered, a reset link was sent"})
@@ -407,7 +410,7 @@ func (h Handler) resetPassword(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.AuthSvc.ResetPassword(r.Context(), req.Token, req.NewPassword); err != nil {
-		writeServiceError(w, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "password reset"})

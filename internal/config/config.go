@@ -13,6 +13,10 @@ type Config struct {
 	AccessTokenSecret string
 	AccessTokenTTL    time.Duration
 	RefreshTokenTTL   time.Duration
+	BrevoAPIKey       string
+	EmailFrom         string
+	AppURL            string
+	FrontendURL       string
 }
 
 func Load() (Config, error) {
@@ -25,12 +29,18 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	appURL := getenv("APP_URL", "http://localhost:8080")
+
 	cfg := Config{
 		Addr:              getenv("ADDR", ":8080"),
 		DatabaseURL:       os.Getenv("DATABASE_URL"),
 		AccessTokenSecret: os.Getenv("ACCESS_TOKEN_SECRET"),
 		AccessTokenTTL:    time.Duration(accessTTLSeconds) * time.Second,
 		RefreshTokenTTL:   time.Duration(refreshTTLDays) * 24 * time.Hour,
+		BrevoAPIKey:       brevoAPIKey(),
+		EmailFrom:         getenv("EMAIL_FROM", "EasyRent <noreply@example.com>"),
+		AppURL:            appURL,
+		FrontendURL:       getenv("FRONTEND_URL", appURL),
 	}
 
 	if cfg.DatabaseURL == "" {
@@ -45,8 +55,20 @@ func Load() (Config, error) {
 	if cfg.RefreshTokenTTL <= 0 {
 		return Config{}, errors.New("REFRESH_TOKEN_TTL_DAYS must be > 0")
 	}
+	if cfg.BrevoAPIKey == "" {
+		return Config{}, errors.New("BREVO_API_KEY is required")
+	}
 
 	return cfg, nil
+}
+
+// brevoAPIKey reads BREVO_API_KEY, falling back to the BREVO_API shorthand
+// some setups use (e.g. a key copied straight from the Brevo dashboard).
+func brevoAPIKey() string {
+	if v := os.Getenv("BREVO_API_KEY"); v != "" {
+		return v
+	}
+	return os.Getenv("BREVO_API")
 }
 
 func getenv(key, def string) string {
