@@ -32,7 +32,7 @@ func Load() (Config, error) {
 	appURL := getenv("APP_URL", "http://localhost:8080")
 
 	cfg := Config{
-		Addr:              getenv("ADDR", ":8080"),
+		Addr:              addr(),
 		DatabaseURL:       os.Getenv("DATABASE_URL"),
 		AccessTokenSecret: os.Getenv("ACCESS_TOKEN_SECRET"),
 		AccessTokenTTL:    time.Duration(accessTTLSeconds) * time.Second,
@@ -76,6 +76,18 @@ func getenv(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// addr prefers ADDR, then falls back to the PORT env var that hosts like
+// Railway/Render inject (the app must listen on it), then :8080 for local.
+func addr() string {
+	if v := os.Getenv("ADDR"); v != "" {
+		return v
+	}
+	if v := os.Getenv("PORT"); v != "" {
+		return ":" + v
+	}
+	return ":8080"
 }
 
 func getenvInt(key string, def int) (int, error) {

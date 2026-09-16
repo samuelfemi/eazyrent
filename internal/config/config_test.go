@@ -66,6 +66,23 @@ func TestLoadBrevoFallbackKey(t *testing.T) {
 	}
 }
 
+func TestLoadPortFallback(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://localhost:5432/test?sslmode=disable")
+	t.Setenv("ACCESS_TOKEN_SECRET", "test-secret")
+	t.Setenv("BREVO_API_KEY", "xkeysib_test")
+	t.Setenv("BREVO_API", "")
+	t.Setenv("ADDR", "")
+	t.Setenv("PORT", "8081")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Addr != ":8081" {
+		t.Fatalf("Addr from PORT: got %q", cfg.Addr)
+	}
+}
+
 func TestLoadMissingSecret(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://localhost:5432/test?sslmode=disable")
 	t.Setenv("ACCESS_TOKEN_SECRET", "")
