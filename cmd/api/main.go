@@ -18,11 +18,14 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
+	"github.com/femi/golang-easyrent/docs"
 	"github.com/femi/golang-easyrent/internal/auth"
 	"github.com/femi/golang-easyrent/internal/config"
 	"github.com/femi/golang-easyrent/internal/db"
@@ -43,6 +46,8 @@ func run() error {
 	if err != nil {
 		return err
 	}
+
+	setSwaggerHost(cfg.AppURL)
 
 	ctx := context.Background()
 
@@ -86,4 +91,18 @@ func run() error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	return srv.Shutdown(shutdownCtx)
+}
+
+// setSwaggerHost points the Swagger UI at the public base URL (APP_URL) so
+// "Try it out" works when deployed. Locally APP_URL defaults to
+// http://localhost:8080, which matches the generated docs default.
+func setSwaggerHost(appURL string) {
+	u, err := url.Parse(appURL)
+	if err != nil || u.Host == "" {
+		return
+	}
+	docs.SwaggerInfo.Host = u.Host
+	if strings.EqualFold(u.Scheme, "https") {
+		docs.SwaggerInfo.Schemes = []string{"https"}
+	}
 }
