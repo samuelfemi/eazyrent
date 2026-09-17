@@ -295,7 +295,19 @@ func (h Handler) getListing(w http.ResponseWriter, r *http.Request) {
 		writeServiceError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toDetailResponse(d))
+
+	detail := toDetailResponse(d)
+	// Unverified / anonymous callers can browse listings but must not see
+	// landlord contact — they have to verify email first.
+	if cu, ok := CurrentUserOf(r); ok && cu.EmailVerified {
+		// already verified via context (if wrapped) — keep contact
+	} else if h.Auth.IsVerifiedRequest(r) {
+		// verified via bearer token without RequireAuth wrapper
+	} else {
+		detail.LandlordPhone = nil
+		detail.LandlordName = nil
+	}
+	writeJSON(w, http.StatusOK, detail)
 }
 
 // parsePageQuery reads page/limit like the TS NumberFromString schema:
