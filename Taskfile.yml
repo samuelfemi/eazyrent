@@ -38,9 +38,12 @@ tasks:
       - go run ./cmd/migrate down
 
   docs:
-    desc: Regenerate Swagger docs (needs swag CLI on PATH)
+    desc: Regenerate the OpenAPI spec rendered by Scalar (needs swag CLI on PATH)
     cmds:
       - swag init -g cmd/api/main.go -o docs --parseInternal
+      # swag also emits docs.go for its own UI runtime, which this repo no
+      # longer uses (Scalar reads swagger.json) — drop the byproduct.
+      - rm docs/docs.go
 
   test:
     desc: Run all tests

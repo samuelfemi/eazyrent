@@ -11,7 +11,7 @@ Copy-Item .env.example .env   # set DATABASE_URL, ACCESS_TOKEN_SECRET, BREVO_API
 task dev                       # migrate up, serve on :8080
 ```
 
-Swagger UI: `http://localhost:8080/swagger/index.html`
+API reference (Scalar): `http://localhost:8080/docs` (raw spec: `/openapi.json`)
 
 ## Endpoints
 
@@ -40,7 +40,7 @@ task migrate      # apply pending SQL migrations
 task migrate-down # roll back the latest migration
 task test         # go test ./...
 task check        # gofmt + vet + tests
-task docs         # regenerate Swagger (needs swag CLI)
+task docs         # regenerate the OpenAPI spec served by Scalar (needs swag CLI)
 ```
 
 ## Layout
@@ -53,5 +53,5 @@ internal/listing, internal/favorite
 internal/ratelimit
 internal/web   decode + validate at the boundary, bearer middleware, CORS
 migrations     000001 core tables, 000002 password resets, 000003 wider price
-docs           brevo + avatar setup (swagger.* is generated)
+docs           brevo + avatar setup (swagger.json/yaml is the OpenAPI spec rendered by Scalar)
 ```

@@ -76,7 +76,7 @@ log line records the Brevo message id, recipient and subject only.
 
 ## 4. Testing
 
-1. `task dev`, sign up in Swagger with a real inbox address.
+1. `task dev`, sign up from the Scalar docs (`/docs`) with a real inbox address.
 2. The verification mail arrives from your `EMAIL_FROM` sender; open the link
    (or paste the token into `GET /auth/verify`).
 3. Same for forgot-password: the reset link arrives within seconds.
