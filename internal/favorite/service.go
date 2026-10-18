@@ -30,5 +30,3 @@ func (s Service) IsFavorited(ctx context.Context, userID, listingID uuid.UUID) (
 func (s Service) List(ctx context.Context, userID uuid.UUID, page, limit int) (listing.Page, error) {
 	return s.store.List(ctx, userID, page, limit)
 }
-
-var _ = listing.ErrListingNotFound

@@ -46,16 +46,11 @@ func (s Store) FindPasswordResetToken(ctx context.Context, tokenHash string) (Pa
 	return t, nil
 }
 
-const markPasswordResetTokenUsedQuery = `
+const claimPasswordResetTokenQuery = `
 	UPDATE password_reset_tokens
 	SET used_at = now()
-	WHERE id = $1
+	WHERE id = $1 AND used_at IS NULL
 `
-
-func (s Store) MarkPasswordResetTokenUsed(ctx context.Context, id uuid.UUID) error {
-	_, err := s.db.ExecContext(ctx, markPasswordResetTokenUsedQuery, id)
-	return err
-}
 
 const updatePasswordQuery = `
 	UPDATE users
@@ -63,7 +58,37 @@ const updatePasswordQuery = `
 	WHERE id = $1
 `
 
-func (s Store) UpdatePassword(ctx context.Context, userID uuid.UUID, passwordHash string) error {
-	_, err := s.db.ExecContext(ctx, updatePasswordQuery, userID, passwordHash)
-	return err
+// CompletePasswordReset applies a reset atomically: it claims the reset token
+// (single-use, race-safe), sets the new password, fences out existing access
+// tokens and revokes every refresh token. A partial application cannot happen,
+// so a failed step never leaves a reusable token or a live stolen session.
+func (s Store) CompletePasswordReset(ctx context.Context, tokenID, userID uuid.UUID, passwordHash string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	res, err := tx.ExecContext(ctx, claimPasswordResetTokenQuery, tokenID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n != 1 {
+		return ErrInvalidResetToken
+	}
+
+	if _, err := tx.ExecContext(ctx, updatePasswordQuery, userID, passwordHash); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, revokeAllUserTokensQuery, userID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, bumpTokensValidAfterQuery, userID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }

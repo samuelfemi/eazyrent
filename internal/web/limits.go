@@ -4,6 +4,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 )
 
 // limiter is the one-method contract the middleware needs.
@@ -13,15 +14,32 @@ type limiter interface {
 	Allow(key string) bool
 }
 
-// clientIP keys public routes by caller. RemoteAddr is the direct peer;
-// behind a proxy that is the proxy, which is fine until forwarded-header
-// handling is actually needed.
-func clientIP(r *http.Request) string {
+// RemoteAddrIP keys callers by the direct peer address. Correct when the
+// process is the first hop; behind a proxy it is the proxy, so prefer
+// ForwardedIP there (see Handler.ClientIP).
+func RemoteAddrIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr
 	}
 	return host
+}
+
+// ForwardedIP keys callers by the client address as reported by a trusted
+// proxy: X-Forwarded-For (leftmost, the original client) then X-Real-IP,
+// falling back to the peer address. Only safe when a trusted proxy actually
+// sets these headers — otherwise clients can spoof them and dodge limits.
+func ForwardedIP(r *http.Request) string {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		first, _, _ := strings.Cut(xff, ",")
+		if ip := strings.TrimSpace(first); ip != "" {
+			return ip
+		}
+	}
+	if ip := strings.TrimSpace(r.Header.Get("X-Real-IP")); ip != "" {
+		return ip
+	}
+	return RemoteAddrIP(r)
 }
 
 // userKey keys authed routes by user. The route must already sit behind
@@ -32,7 +50,7 @@ func userKey(prefix string) func(*http.Request) string {
 		if cu, ok := CurrentUserOf(r); ok {
 			return prefix + cu.UserID.String()
 		}
-		return prefix + clientIP(r)
+		return prefix + RemoteAddrIP(r)
 	}
 }
 

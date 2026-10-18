@@ -3,6 +3,7 @@ package web
 import (
 	"encoding/json"
 	"errors"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -153,7 +154,7 @@ const maxPrice = 999999999999.99
 func parsePrice(s string) error {
 	s = strings.ReplaceAll(strings.TrimSpace(s), ",", "")
 	n, err := strconv.ParseFloat(s, 64)
-	if err != nil || n < 0 {
+	if err != nil || math.IsNaN(n) || math.IsInf(n, 0) || n < 0 {
 		return errors.New("price must be a positive number")
 	}
 	if n > maxPrice {
@@ -241,8 +242,7 @@ func (h Handler) createListing(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req createListingRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	req.Title = strings.TrimSpace(req.Title)
@@ -298,14 +298,13 @@ func (h Handler) getListing(w http.ResponseWriter, r *http.Request) {
 
 	detail := toDetailResponse(d)
 	// Unverified / anonymous callers can browse listings but must not see
-	// landlord contact — they have to verify email first.
-	if cu, ok := CurrentUserOf(r); ok && cu.EmailVerified {
-		// already verified via context (if wrapped) — keep contact
-	} else if h.Auth.IsVerifiedRequest(r) {
-		// verified via bearer token without RequireAuth wrapper
-	} else {
-		detail.LandlordPhone = nil
-		detail.LandlordName = nil
+	// landlord contact — they have to verify email first. The route is not
+	// behind RequireAuth, so the bearer token (if any) is verified inline.
+	if cu, ok := CurrentUserOf(r); !ok || !cu.EmailVerified {
+		if !h.Auth.IsVerifiedBearer(r) {
+			detail.LandlordPhone = nil
+			detail.LandlordName = nil
+		}
 	}
 	writeJSON(w, http.StatusOK, detail)
 }
@@ -555,8 +554,7 @@ func (h Handler) updateListing(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req updateListingRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	if err := req.validate(); err != nil {
@@ -637,8 +635,7 @@ func (h Handler) updateListingStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req updateStatusRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	if !validStatus(req.Status) {
@@ -689,8 +686,7 @@ func (h Handler) addMedia(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req addMediaRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	req.URL = strings.TrimSpace(req.URL)

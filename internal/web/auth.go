@@ -13,6 +13,9 @@ type CurrentUser struct {
 	UserID        uuid.UUID
 	Email         string
 	EmailVerified bool
+	// User is the fully loaded row, so handlers that already need the user
+	// do not have to hit the database a second time.
+	User auth.User
 }
 
 type currentUserKey struct{}
@@ -43,7 +46,15 @@ func (a Auth) RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		ctx := context.WithValue(r.Context(), currentUserKey{}, CurrentUser{UserID: user.ID, Email: user.Email, EmailVerified: user.EmailVerified})
+		// A password reset or reuse-detection lockdown bumps this watermark;
+		// tokens minted before it are refused even though the JWT is valid.
+		if user.TokensValidAfter.Valid && payload.IssuedAt.Before(user.TokensValidAfter.Time) {
+			writeError(w, http.StatusUnauthorized, "session no longer valid")
+			return
+		}
+
+		cu := CurrentUser{UserID: user.ID, Email: user.Email, EmailVerified: user.EmailVerified, User: user}
+		ctx := context.WithValue(r.Context(), currentUserKey{}, cu)
 		next(w, r.WithContext(ctx))
 	}
 }
@@ -68,7 +79,10 @@ func CurrentUserOf(r *http.Request) (CurrentUser, bool) {
 	return u, ok
 }
 
-func (a Auth) IsVerifiedRequest(r *http.Request) bool {
+// IsVerifiedBearer reports whether the request carries a valid access token
+// for a verified user. Public routes that optionally reveal more to signed-in
+// callers use this instead of forcing RequireAuth.
+func (a Auth) IsVerifiedBearer(r *http.Request) bool {
 	token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 	token = strings.TrimSpace(token)
 	if !ok || token == "" {
@@ -80,6 +94,9 @@ func (a Auth) IsVerifiedRequest(r *http.Request) bool {
 	}
 	user, err := a.Users.FindByID(r.Context(), payload.UserID)
 	if err != nil {
+		return false
+	}
+	if user.TokensValidAfter.Valid && payload.IssuedAt.Before(user.TokensValidAfter.Time) {
 		return false
 	}
 	return user.EmailVerified

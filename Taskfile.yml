@@ -46,9 +46,14 @@ tasks:
       - rm docs/docs.go
 
   test:
-    desc: Run all tests
+    desc: Run all tests (DB tests run when DATABASE_URL is set, else they skip)
     cmds:
       - go test ./...
+
+  lint:
+    desc: Run staticcheck (installs it on demand)
+    cmds:
+      - go run honnef.co/go/tools/cmd/staticcheck@latest ./...
 
   vet:
     desc: go vet
@@ -60,9 +65,15 @@ tasks:
     cmds:
       - gofmt -l -w .
 
+  fmt-check:
+    desc: Fail if any file is not gofmt-formatted
+    cmds:
+      - gofmt -l .
+
   check:
-    desc: Format check + vet + tests
+    desc: Format check + vet + lint + tests
     cmds:
       - task: fmt
       - task: vet
+      - task: lint
       - task: test

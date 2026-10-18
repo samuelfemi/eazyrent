@@ -26,7 +26,7 @@ func TestLoadAuth(t *testing.T) {
 	if cfg.RefreshTokenTTL != 7*24*time.Hour {
 		t.Fatalf("RefreshTokenTTL: got %v", cfg.RefreshTokenTTL)
 	}
-	if cfg.BrevoAPIKey != "xkeysib_test" || cfg.EmailFrom != "EasyRent <test@example.com>" || cfg.AppURL != "http://localhost:8080" {
+	if cfg.BrevoAPIKey != "xkeysib_test" || cfg.EmailFrom != "EasyRent <test@example.com>" {
 		t.Fatalf("mail config: %+v", cfg)
 	}
 	if cfg.FrontendURL != "http://localhost:3000" {
@@ -125,5 +125,25 @@ func TestLoadMissingBrevoKey(t *testing.T) {
 
 	if _, err := Load(); err == nil {
 		t.Fatal("Load should fail without BREVO_API_KEY")
+	}
+}
+
+func TestLoadTrustProxy(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://localhost:5432/test?sslmode=disable")
+	t.Setenv("ACCESS_TOKEN_SECRET", "test-secret")
+	t.Setenv("BREVO_API_KEY", "xkeysib_test")
+
+	t.Setenv("TRUST_PROXY", "")
+	if cfg, err := Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	} else if cfg.TrustProxy {
+		t.Fatal("TrustProxy should default to false")
+	}
+
+	t.Setenv("TRUST_PROXY", "true")
+	if cfg, err := Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	} else if !cfg.TrustProxy {
+		t.Fatal("TrustProxy should honor TRUST_PROXY=true")
 	}
 }

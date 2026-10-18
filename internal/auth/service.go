@@ -4,11 +4,24 @@ import (
 	"context"
 	"errors"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 )
+
+// dummyPasswordHash is a valid argon2id hash verified against the submitted
+// password when no account matches, so an unknown email costs the same as a
+// known one. Without it the fast path leaks which emails are registered.
+const dummyPasswordHash = `$argon2id$v=19$m=65536,t=1,p=4$YSvBa7MjbvrSiWbBtvXVfw$Hm4ifzLu/+vtfj9GQFAeq4D7wd8P43RXkO2Sfmhw5MQ`
+
+// normalizeEmail folds an address to the canonical form stored and looked up.
+// The users table is unique on lower(email), so this keeps case variants from
+// creating duplicate accounts.
+func normalizeEmail(email string) string {
+	return strings.ToLower(strings.TrimSpace(email))
+}
 
 // AuthTokens is the issued pair returned by sign-up, sign-in and refresh.
 type AuthTokens struct {
@@ -66,6 +79,7 @@ func (s Service) issueTokens(ctx context.Context, userID uuid.UUID, email string
 // verification mail best-effort (a mail failure only logs, like the TS
 // catch+warn). It returns the first token pair immediately.
 func (s Service) SignUp(ctx context.Context, email, password, phone, fullName string) (AuthTokens, error) {
+	email = normalizeEmail(email)
 	if _, err := s.Users.FindByEmail(ctx, email); err == nil {
 		return AuthTokens{}, ErrEmailTaken
 	} else if !errors.Is(err, ErrUserNotFound) {
@@ -108,9 +122,13 @@ func (s Service) SignUp(ctx context.Context, email, password, phone, fullName st
 // token pair. Unknown emails and wrong passwords both yield
 // ErrInvalidCredentials so callers cannot probe for accounts.
 func (s Service) SignIn(ctx context.Context, email, password string) (AuthTokens, error) {
+	email = normalizeEmail(email)
 	user, err := s.Users.FindByEmail(ctx, email)
 	if err != nil {
 		if errors.Is(err, ErrUserNotFound) {
+			// Spend the same work as a real account so response time does
+			// not reveal whether the email is registered.
+			_, _ = VerifyPassword(dummyPasswordHash, password)
 			return AuthTokens{}, ErrInvalidCredentials
 		}
 		return AuthTokens{}, err
@@ -160,8 +178,14 @@ func (s Service) Refresh(ctx context.Context, rawRefreshToken string) (AuthToken
 		return AuthTokens{}, ErrTokenExpired
 	}
 
-	if err := s.Users.RevokeRefreshToken(ctx, stored.ID); err != nil {
+	// Claim the token atomically; losing the race to a concurrent rotation
+	// means this presentation is stale, so reject it.
+	claimed, err := s.Users.ClaimRefreshToken(ctx, stored.ID)
+	if err != nil {
 		return AuthTokens{}, err
+	}
+	if !claimed {
+		return AuthTokens{}, ErrInvalidToken
 	}
 
 	user, err := s.Users.FindByID(ctx, stored.UserID)
@@ -210,7 +234,7 @@ func (s Service) VerifyEmail(ctx context.Context, token string) error {
 // succeed silently: the caller must not learn whether an email is
 // registered. The reset mail is sent best-effort, like sign-up mail.
 func (s Service) RequestPasswordReset(ctx context.Context, email string) error {
-	user, err := s.Users.FindByEmail(ctx, email)
+	user, err := s.Users.FindByEmail(ctx, normalizeEmail(email))
 	if err != nil {
 		if errors.Is(err, ErrUserNotFound) {
 			return nil
@@ -254,13 +278,7 @@ func (s Service) ResetPassword(ctx context.Context, rawToken, newPassword string
 		return err
 	}
 
-	if err := s.Users.UpdatePassword(ctx, stored.UserID, passwordHash); err != nil {
-		return err
-	}
-	if err := s.Users.MarkPasswordResetTokenUsed(ctx, stored.ID); err != nil {
-		return err
-	}
-	if err := s.Users.RevokeAllUserTokens(ctx, stored.UserID); err != nil {
+	if err := s.Users.CompletePasswordReset(ctx, stored.ID, stored.UserID, passwordHash); err != nil {
 		return err
 	}
 

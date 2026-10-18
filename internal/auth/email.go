@@ -17,6 +17,10 @@ import (
 // Override EmailSender.BaseURL in tests to point at a stub server.
 const BrevoAPIBase = "https://api.brevo.com/v3"
 
+// defaultHTTPClient is shared so sends reuse connections instead of
+// allocating a client (and its transport) per email.
+var defaultHTTPClient = &http.Client{Timeout: 10 * time.Second}
+
 type EmailSender struct {
 	APIKey string
 	From   string
@@ -51,7 +55,7 @@ func (s EmailSender) send(to, subject, htmlBody string) error {
 	}
 	client := s.HTTPClient
 	if client == nil {
-		client = &http.Client{Timeout: 10 * time.Second}
+		client = defaultHTTPClient
 	}
 
 	req, err := http.NewRequest(http.MethodPost, strings.TrimSuffix(base, "/")+"/smtp/email", bytes.NewReader(body))

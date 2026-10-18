@@ -12,8 +12,9 @@ import (
 )
 
 type AccessTokenPayload struct {
-	UserID uuid.UUID
-	Email  string
+	UserID   uuid.UUID
+	Email    string
+	IssuedAt time.Time
 }
 
 type Tokens struct {
@@ -58,7 +59,11 @@ func (t Tokens) VerifyAccessToken(token string) (AccessTokenPayload, error) {
 	if err != nil || claims.Email == "" {
 		return AccessTokenPayload{}, ErrInvalidToken
 	}
-	return AccessTokenPayload{UserID: id, Email: claims.Email}, nil
+	payload := AccessTokenPayload{UserID: id, Email: claims.Email}
+	if claims.IssuedAt != nil {
+		payload.IssuedAt = claims.IssuedAt.Time
+	}
+	return payload, nil
 }
 
 func randomHex(n int) (string, error) {

@@ -24,8 +24,12 @@ type User struct {
 	EmailVerified              bool           `json:"email_verified"`
 	VerificationToken          sql.NullString `json:"verification_token"`
 	VerificationTokenExpiresAt sql.NullTime   `json:"verification_token_expires_at"`
-	CreatedAt                  time.Time      `json:"created_at"`
-	UpdatedAt                  time.Time      `json:"updated_at"`
+	// TokensValidAfter, when set, is the instant before which access tokens
+	// are rejected even though JWTs are stateless. Bumped when every session
+	// must die (password reset, refresh-token reuse).
+	TokensValidAfter sql.NullTime `json:"-"`
+	CreatedAt        time.Time    `json:"created_at"`
+	UpdatedAt        time.Time    `json:"updated_at"`
 }
 
 type RefreshToken struct {
@@ -45,7 +49,7 @@ func NewStore(db *sql.DB) Store {
 
 const userColumns = `id, email, phone, password_hash, full_name, avatar_url,
 	email_verified, verification_token, verification_token_expires_at,
-	created_at, updated_at`
+	tokens_valid_after, created_at, updated_at`
 
 type scanner interface {
 	Scan(dest ...any) error
@@ -63,6 +67,7 @@ func scanUser(s scanner) (User, error) {
 		&u.EmailVerified,
 		&u.VerificationToken,
 		&u.VerificationTokenExpiresAt,
+		&u.TokensValidAfter,
 		&u.CreatedAt,
 		&u.UpdatedAt,
 	)
@@ -72,7 +77,7 @@ func scanUser(s scanner) (User, error) {
 const findUserByEmailQuery = `
 	SELECT ` + userColumns + `
 	FROM users
-	WHERE email = $1
+	WHERE lower(email) = lower($1)
 	LIMIT 1
 `
 
@@ -175,15 +180,79 @@ func (s Store) RevokeRefreshToken(ctx context.Context, id uuid.UUID) error {
 	return err
 }
 
+const claimRefreshTokenQuery = `
+	UPDATE refresh_tokens
+	SET revoked_at = now()
+	WHERE id = $1 AND revoked_at IS NULL
+`
+
+// ClaimRefreshToken atomically revokes a token only if it is still live,
+// reporting whether this call won the race. Concurrent rotations of the same
+// token therefore succeed exactly once.
+func (s Store) ClaimRefreshToken(ctx context.Context, id uuid.UUID) (bool, error) {
+	res, err := s.db.ExecContext(ctx, claimRefreshTokenQuery, id)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n == 1, nil
+}
+
 const revokeAllUserTokensQuery = `
 	UPDATE refresh_tokens
 	SET revoked_at = now()
 	WHERE user_id = $1 AND revoked_at IS NULL
 `
 
+// bumpTokensValidAfter fences out access tokens minted before now, using
+// second precision to match the JWT IssuedAt claim.
+const bumpTokensValidAfterQuery = `
+	UPDATE users
+	SET tokens_valid_after = date_trunc('second', now())
+	WHERE id = $1
+`
+
+// RevokeAllUserTokens kills every session of a user: all refresh tokens are
+// revoked and, in the same transaction, the access-token watermark is bumped
+// so already-issued access tokens stop working too.
 func (s Store) RevokeAllUserTokens(ctx context.Context, userID uuid.UUID) error {
-	_, err := s.db.ExecContext(ctx, revokeAllUserTokensQuery, userID)
-	return err
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx, revokeAllUserTokensQuery, userID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, bumpTokensValidAfterQuery, userID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// DeleteExpiredSessions sweeps refresh and password-reset tokens that are
+// past expiry, returning how many rows each delete removed.
+func (s Store) DeleteExpiredSessions(ctx context.Context) (refresh, reset int64, err error) {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM refresh_tokens WHERE expires_at < now()`)
+	if err != nil {
+		return 0, 0, err
+	}
+	if refresh, err = res.RowsAffected(); err != nil {
+		return 0, 0, err
+	}
+
+	res, err = s.db.ExecContext(ctx, `DELETE FROM password_reset_tokens WHERE expires_at < now()`)
+	if err != nil {
+		return 0, 0, err
+	}
+	if reset, err = res.RowsAffected(); err != nil {
+		return 0, 0, err
+	}
+	return refresh, reset, nil
 }
 
 const storeVerificationTokenQuery = `

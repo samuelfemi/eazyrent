@@ -14,8 +14,9 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
-// testLandlordWithToken creates a user and mints a bearer token for it,
-// cleaning the user up (listings cascade) when the test ends.
+// testLandlordWithToken creates a verified user and mints a bearer token for
+// it, cleaning the user up (listings cascade) when the test ends. Verified so
+// the RequireVerified write routes are exercised rather than gated.
 func testLandlordWithToken(t *testing.T, db *sql.DB, h Handler, tag string) (string, string) {
 	t.Helper()
 
@@ -23,13 +24,17 @@ func testLandlordWithToken(t *testing.T, db *sql.DB, h Handler, tag string) (str
 	email := fmt.Sprintf("http-landlord-%s-%d@example.com", tag, suffix)
 	phone := fmt.Sprintf("+234%013d", suffix%10000000000000)
 
-	u, err := auth.NewStore(db).CreateUser(context.Background(), email, phone, "hash-placeholder", "Landlord "+tag)
+	store := auth.NewStore(db)
+	u, err := store.CreateUser(context.Background(), email, phone, "hash-placeholder", "Landlord "+tag)
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
 	t.Cleanup(func() {
 		_, _ = db.ExecContext(context.Background(), `DELETE FROM users WHERE id = $1`, u.ID)
 	})
+	if err := store.MarkEmailVerified(context.Background(), u.ID); err != nil {
+		t.Fatalf("MarkEmailVerified: %v", err)
+	}
 
 	raw, err := h.AuthSvc.Tokens.SignAccessToken(u.ID, u.Email)
 	if err != nil {
@@ -140,8 +145,18 @@ func TestListingEndpoints(t *testing.T) {
 	}
 	var detail listingDetailResponse
 	decodeBody(t, rec, &detail)
-	if detail.Listing.ID != listingID || len(detail.Media) != 0 || detail.LandlordName == nil {
+	// Anonymous callers can read the listing but not the landlord contact.
+	if detail.Listing.ID != listingID || len(detail.Media) != 0 {
 		t.Fatalf("wrong detail body: %+v", detail)
+	}
+	if detail.LandlordName != nil || detail.LandlordPhone != nil {
+		t.Fatalf("anonymous detail must hide landlord contact: %+v", detail)
+	}
+	// A verified caller sees the contact details.
+	rec = doJSON(t, mux, http.MethodGet, "/listings/"+listingID, "", owner)
+	decodeBody(t, rec, &detail)
+	if detail.LandlordName == nil {
+		t.Fatalf("verified detail should include landlord contact: %+v", detail)
 	}
 
 	// List: public, filters, bad query.

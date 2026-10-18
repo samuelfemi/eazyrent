@@ -153,4 +153,13 @@ func TestAuthStoreLifecycle(t *testing.T) {
 	if !tok2.RevokedAt.Valid {
 		t.Fatal("second token should be revoked after RevokeAllUserTokens")
 	}
+
+	// Revoking all sessions must also fence out already-issued access tokens.
+	afterRevoke, err := store.FindByID(ctx, u.ID)
+	if err != nil {
+		t.Fatalf("FindByID after revoke-all: %v", err)
+	}
+	if !afterRevoke.TokensValidAfter.Valid {
+		t.Fatal("RevokeAllUserTokens should set tokens_valid_after")
+	}
 }

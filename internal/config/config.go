@@ -15,8 +15,10 @@ type Config struct {
 	RefreshTokenTTL   time.Duration
 	BrevoAPIKey       string
 	EmailFrom         string
-	AppURL            string
 	FrontendURL       string
+	// TrustProxy makes rate limiting key on X-Forwarded-For/X-Real-IP, which
+	// is only correct when a trusted reverse proxy sets them.
+	TrustProxy bool
 }
 
 func Load() (Config, error) {
@@ -39,8 +41,8 @@ func Load() (Config, error) {
 		RefreshTokenTTL:   time.Duration(refreshTTLDays) * 24 * time.Hour,
 		BrevoAPIKey:       brevoAPIKey(),
 		EmailFrom:         getenv("EMAIL_FROM", "EasyRent <noreply@example.com>"),
-		AppURL:            appURL,
 		FrontendURL:       getenv("FRONTEND_URL", appURL),
+		TrustProxy:        getenvBool("TRUST_PROXY", false),
 	}
 
 	if cfg.DatabaseURL == "" {
@@ -100,4 +102,16 @@ func getenvInt(key string, def int) (int, error) {
 		return 0, errors.New(key + " must be an integer")
 	}
 	return n, nil
+}
+
+func getenvBool(key string, def bool) bool {
+	v := os.Getenv(key)
+	if v == "" {
+		return def
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return def
+	}
+	return b
 }

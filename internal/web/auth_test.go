@@ -120,3 +120,60 @@ func TestRequireAuth(t *testing.T) {
 		t.Fatalf("deleted user: want 401, got %d", rec.Code)
 	}
 }
+
+// TestRequireVerified covers the verified-email gate and the access-token
+// revocation watermark: a validly signed token is refused once the user's
+// tokens_valid_after moves past its IssuedAt.
+func TestRequireVerified(t *testing.T) {
+	db := openAuthTestDB(t)
+	store := auth.NewStore(db)
+	tokens := auth.Tokens{Secret: []byte("web-test-secret-please-ignore-01"), AccessTTL: time.Hour}
+	ctx := context.Background()
+
+	email := fmt.Sprintf("verified-test-%d@example.com", time.Now().UnixNano())
+	phone := fmt.Sprintf("+234%013d", time.Now().UnixNano()%10000000000000)
+	u, err := store.CreateUser(ctx, email, phone, "hash-placeholder", "Verified User")
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(ctx, `DELETE FROM users WHERE id = $1`, u.ID)
+	})
+
+	raw, err := tokens.SignAccessToken(u.ID, u.Email)
+	if err != nil {
+		t.Fatalf("SignAccessToken: %v", err)
+	}
+
+	a := Auth{Users: store, Tokens: tokens}
+	verified := a.RequireVerified(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]string{"ok": "true"})
+	})
+
+	call := func() int {
+		req := httptest.NewRequest(http.MethodPut, "/me/avatar", nil)
+		req.Header.Set("Authorization", "Bearer "+raw)
+		rec := httptest.NewRecorder()
+		verified.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	if code := call(); code != http.StatusForbidden {
+		t.Fatalf("unverified: want 403, got %d", code)
+	}
+	if err := store.MarkEmailVerified(ctx, u.ID); err != nil {
+		t.Fatalf("MarkEmailVerified: %v", err)
+	}
+	if code := call(); code != http.StatusOK {
+		t.Fatalf("verified: want 200, got %d", code)
+	}
+
+	// A watermark in the future stands in for RevokeAllUserTokens bumping it,
+	// so the check is exercised deterministically.
+	if _, err := db.ExecContext(ctx, `UPDATE users SET tokens_valid_after = now() + interval '1 hour' WHERE id = $1`, u.ID); err != nil {
+		t.Fatalf("bump watermark: %v", err)
+	}
+	if code := call(); code != http.StatusUnauthorized {
+		t.Fatalf("revoked token: want 401, got %d", code)
+	}
+}

@@ -1,7 +1,6 @@
 package web
 
 import (
-	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
@@ -87,8 +86,7 @@ func (r signUpRequest) validate() error {
 //	@Router			/auth/signup [post]
 func (h Handler) signUp(w http.ResponseWriter, r *http.Request) {
 	var req signUpRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	req.Email = strings.TrimSpace(req.Email)
@@ -127,8 +125,7 @@ type signInRequest struct {
 //	@Router			/auth/signin [post]
 func (h Handler) signIn(w http.ResponseWriter, r *http.Request) {
 	var req signInRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	req.Email = strings.TrimSpace(req.Email)
@@ -163,8 +160,7 @@ type refreshRequest struct {
 //	@Router			/auth/refresh [post]
 func (h Handler) refresh(w http.ResponseWriter, r *http.Request) {
 	var req refreshRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	if strings.TrimSpace(req.RefreshToken) == "" {
@@ -193,8 +189,7 @@ func (h Handler) refresh(w http.ResponseWriter, r *http.Request) {
 //	@Router			/auth/signout [post]
 func (h Handler) signOut(w http.ResponseWriter, r *http.Request) {
 	var req refreshRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	if strings.TrimSpace(req.RefreshToken) == "" {
@@ -228,6 +223,11 @@ func (h Handler) verifyEmail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.AuthSvc.VerifyEmail(r.Context(), token); err != nil {
+		// An expired verification link is a bad request, not an auth failure.
+		if errors.Is(err, auth.ErrTokenExpired) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		writeServiceError(w, r, err)
 		return
 	}
@@ -280,13 +280,7 @@ func (h Handler) me(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "missing bearer token")
 		return
 	}
-
-	user, err := h.AuthSvc.Users.FindByID(r.Context(), cu.UserID)
-	if err != nil {
-		writeServiceError(w, r, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, toUserResponse(user))
+	writeJSON(w, http.StatusOK, toUserResponse(cu.User))
 }
 
 type avatarRequest struct {
@@ -316,8 +310,7 @@ func (h Handler) updateAvatar(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req avatarRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	req.AvatarURL = strings.TrimSpace(req.AvatarURL)
@@ -359,8 +352,7 @@ type forgotPasswordRequest struct {
 //	@Router			/auth/forgot-password [post]
 func (h Handler) forgotPassword(w http.ResponseWriter, r *http.Request) {
 	var req forgotPasswordRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	req.Email = strings.TrimSpace(req.Email)
@@ -395,8 +387,7 @@ type resetPasswordRequest struct {
 //	@Router			/auth/reset-password [post]
 func (h Handler) resetPassword(w http.ResponseWriter, r *http.Request) {
 	var req resetPasswordRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	req.Token = strings.TrimSpace(req.Token)
@@ -410,6 +401,11 @@ func (h Handler) resetPassword(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.AuthSvc.ResetPassword(r.Context(), req.Token, req.NewPassword); err != nil {
+		// An expired reset link is a bad request, not an auth failure.
+		if errors.Is(err, auth.ErrTokenExpired) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		writeServiceError(w, r, err)
 		return
 	}

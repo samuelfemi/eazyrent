@@ -97,16 +97,20 @@ func NormalizePagination(page, limit int) (int, int) {
 	return page, limit
 }
 
-const listingColumns = `id, landlord_id, title, description, price::text,
-	rooms, furnished, status, address,
-	ST_Y(location::geometry) AS latitude, ST_X(location::geometry) AS longitude,
-	created_at, updated_at`
+// Columns is the SELECT list for a listing row, aliased as l. It is shared
+// with the favorite store so the projection stays in one place.
+const Columns = `l.id, l.landlord_id, l.title, l.description, l.price::text,
+	l.rooms, l.furnished, l.status, l.address,
+	ST_Y(l.location::geometry) AS latitude, ST_X(l.location::geometry) AS longitude,
+	l.created_at, l.updated_at`
 
-type scanner interface {
+// RowScanner is satisfied by *sql.Row and *sql.Rows.
+type RowScanner interface {
 	Scan(dest ...any) error
 }
 
-func scanListing(s scanner) (Listing, error) {
+// ScanListing reads one listing in Columns order.
+func ScanListing(s RowScanner) (Listing, error) {
 	var l Listing
 	err := s.Scan(
 		&l.ID,
@@ -126,14 +130,95 @@ func scanListing(s scanner) (Listing, error) {
 	return l, err
 }
 
+// Queryer is satisfied by *sql.DB and *sql.Tx.
+type Queryer interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
+// AttachListMeta fills FavoriteCount and CoverImage on listings with two
+// batched queries, so list endpoints never issue per-row reads. It is shared
+// by the listing and favorite stores.
+func AttachListMeta(ctx context.Context, q Queryer, listings []Listing) error {
+	if len(listings) == 0 {
+		return nil
+	}
+	ids := make([]string, len(listings))
+	for i, l := range listings {
+		ids[i] = l.ID.String()
+	}
+
+	favCounts := map[uuid.UUID]int64{}
+	favRows, err := q.QueryContext(ctx, `
+		SELECT listing_id, COUNT(*)
+		FROM favorites
+		WHERE listing_id = ANY($1::uuid[])
+		GROUP BY listing_id`, ids)
+	if err != nil {
+		return err
+	}
+	for favRows.Next() {
+		var id uuid.UUID
+		var n int64
+		if err := favRows.Scan(&id, &n); err != nil {
+			favRows.Close()
+			return err
+		}
+		favCounts[id] = n
+	}
+	favRows.Close()
+	if err := favRows.Err(); err != nil {
+		return err
+	}
+
+	covers := map[uuid.UUID]string{}
+	coverRows, err := q.QueryContext(ctx, `
+		SELECT DISTINCT ON (listing_id) listing_id, url
+		FROM listing_media
+		WHERE listing_id = ANY($1::uuid[])
+		ORDER BY listing_id, "order"`, ids)
+	if err != nil {
+		return err
+	}
+	for coverRows.Next() {
+		var id uuid.UUID
+		var url string
+		if err := coverRows.Scan(&id, &url); err != nil {
+			coverRows.Close()
+			return err
+		}
+		covers[id] = url
+	}
+	coverRows.Close()
+	if err := coverRows.Err(); err != nil {
+		return err
+	}
+
+	for i := range listings {
+		listings[i].FavoriteCount = favCounts[listings[i].ID]
+		if url, ok := covers[listings[i].ID]; ok {
+			listings[i].CoverImage = sql.NullString{String: url, Valid: true}
+		}
+	}
+	return nil
+}
+
+// escapeLike neutralizes LIKE wildcards in user input so a search for "%%"
+// does not match every row. Postgres escapes with a backslash by default.
+func escapeLike(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, "%", `\%`)
+	s = strings.ReplaceAll(s, "_", `\_`)
+	return s
+}
+
 const createListingQuery = `
-	INSERT INTO listings (landlord_id, title, description, price, rooms, furnished, address, location)
+	INSERT INTO listings AS l (landlord_id, title, description, price, rooms, furnished, address, location)
 	VALUES ($1, $2, $3, $4::numeric, $5, $6, $7, ST_SetSRID(ST_MakePoint($8, $9), 4326))
-	RETURNING ` + listingColumns + `
+	RETURNING ` + Columns + `
 `
 
 func (s Store) Create(ctx context.Context, landlordID uuid.UUID, title, description, price string, rooms int, furnished bool, latitude, longitude float64, address string) (Listing, error) {
-	l, err := scanListing(s.db.QueryRowContext(ctx, createListingQuery,
+	l, err := ScanListing(s.db.QueryRowContext(ctx, createListingQuery,
 		landlordID, title, description, price, rooms, furnished, address, longitude, latitude))
 	if err != nil {
 		return Listing{}, err
@@ -142,7 +227,7 @@ func (s Store) Create(ctx context.Context, landlordID uuid.UUID, title, descript
 }
 
 const findListingByIDQuery = `
-	SELECT ` + listingColumns + `
+	SELECT ` + Columns + `
 	FROM listings l
 	WHERE l.id = $1
 	LIMIT 1
@@ -155,7 +240,7 @@ const countFavoritesQuery = `
 `
 
 func (s Store) FindByID(ctx context.Context, id uuid.UUID) (Listing, error) {
-	l, err := scanListing(s.db.QueryRowContext(ctx, findListingByIDQuery, id))
+	l, err := ScanListing(s.db.QueryRowContext(ctx, findListingByIDQuery, id))
 	if err == sql.ErrNoRows {
 		return Listing{}, ErrListingNotFound
 	}
@@ -170,10 +255,7 @@ func (s Store) FindByID(ctx context.Context, id uuid.UUID) (Listing, error) {
 }
 
 const findDetailQuery = `
-	SELECT l.id, l.landlord_id, l.title, l.description, l.price::text,
-		l.rooms, l.furnished, l.status, l.address,
-		ST_Y(l.location::geometry) AS latitude, ST_X(l.location::geometry) AS longitude,
-		l.created_at, l.updated_at, u.phone, u.full_name
+	SELECT ` + Columns + `, u.phone, u.full_name
 	FROM listings l
 	LEFT JOIN users u ON u.id = l.landlord_id
 	WHERE l.id = $1
@@ -187,7 +269,7 @@ const findMediaQuery = `
 	ORDER BY "order"
 `
 
-func scanMedia(s scanner) (Media, error) {
+func scanMedia(s RowScanner) (Media, error) {
 	var m Media
 	err := s.Scan(&m.ID, &m.ListingID, &m.URL, &m.Type, &m.Order, &m.CreatedAt)
 	return m, err
@@ -252,7 +334,7 @@ func (s Store) list(ctx context.Context, conds []string, args []any, page, limit
 		where = "WHERE " + strings.Join(conds, " AND ")
 	}
 
-	selectQuery := `SELECT ` + listingColumns + `
+	selectQuery := `SELECT ` + Columns + `
 		FROM listings l ` + where + `
 		ORDER BY l.created_at DESC` + fmt.Sprintf(" LIMIT $%d OFFSET $%d", len(args)+1, len(args)+2)
 	rows, err := s.db.QueryContext(ctx, selectQuery, append(args, limit, offset)...)
@@ -263,7 +345,7 @@ func (s Store) list(ctx context.Context, conds []string, args []any, page, limit
 
 	listings := []Listing{}
 	for rows.Next() {
-		l, err := scanListing(rows)
+		l, err := ScanListing(rows)
 		if err != nil {
 			return Page{}, err
 		}
@@ -279,64 +361,8 @@ func (s Store) list(ctx context.Context, conds []string, args []any, page, limit
 		return Page{}, err
 	}
 
-	favCounts := map[uuid.UUID]int64{}
-	covers := map[uuid.UUID]string{}
-	if len(listings) > 0 {
-		ids := make([]string, len(listings))
-		for i, l := range listings {
-			ids[i] = l.ID.String()
-		}
-
-		favRows, err := s.db.QueryContext(ctx, `
-			SELECT listing_id, COUNT(*)
-			FROM favorites
-			WHERE listing_id = ANY($1::uuid[])
-			GROUP BY listing_id`, ids)
-		if err != nil {
-			return Page{}, err
-		}
-		for favRows.Next() {
-			var id uuid.UUID
-			var n int64
-			if err := favRows.Scan(&id, &n); err != nil {
-				favRows.Close()
-				return Page{}, err
-			}
-			favCounts[id] = n
-		}
-		favRows.Close()
-		if err := favRows.Err(); err != nil {
-			return Page{}, err
-		}
-
-		coverRows, err := s.db.QueryContext(ctx, `
-			SELECT DISTINCT ON (listing_id) listing_id, url
-			FROM listing_media
-			WHERE listing_id = ANY($1::uuid[])
-			ORDER BY listing_id, "order"`, ids)
-		if err != nil {
-			return Page{}, err
-		}
-		for coverRows.Next() {
-			var id uuid.UUID
-			var url string
-			if err := coverRows.Scan(&id, &url); err != nil {
-				coverRows.Close()
-				return Page{}, err
-			}
-			covers[id] = url
-		}
-		coverRows.Close()
-		if err := coverRows.Err(); err != nil {
-			return Page{}, err
-		}
-	}
-
-	for i, l := range listings {
-		listings[i].FavoriteCount = favCounts[l.ID]
-		if url, ok := covers[l.ID]; ok {
-			listings[i].CoverImage = sql.NullString{String: url, Valid: true}
-		}
+	if err := AttachListMeta(ctx, s.db, listings); err != nil {
+		return Page{}, err
 	}
 
 	return Page{
@@ -380,7 +406,7 @@ func (s Store) FindAll(ctx context.Context, page, limit int, f Filters) (Page, e
 	}
 	if f.Search != "" {
 		conds = append(conds, fmt.Sprintf("(l.title ILIKE $%d OR l.address ILIKE $%d OR l.description ILIKE $%d)", next(), next()+1, next()+2))
-		term := "%" + f.Search + "%"
+		term := "%" + escapeLike(f.Search) + "%"
 		args = append(args, term, term, term)
 	}
 
@@ -454,9 +480,9 @@ func (s Store) Update(ctx context.Context, id uuid.UUID, p UpdateParams) (Listin
 
 	args = append(args, id)
 	query := `UPDATE listings AS l SET ` + strings.Join(sets, ", ") +
-		fmt.Sprintf(` WHERE l.id = $%d RETURNING `, len(args)) + listingColumns
+		fmt.Sprintf(` WHERE l.id = $%d RETURNING `, len(args)) + Columns
 
-	l, err := scanListing(s.db.QueryRowContext(ctx, query, args...))
+	l, err := ScanListing(s.db.QueryRowContext(ctx, query, args...))
 	if err == sql.ErrNoRows {
 		return Listing{}, ErrListingNotFound
 	}

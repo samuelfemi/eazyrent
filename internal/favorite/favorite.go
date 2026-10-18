@@ -3,11 +3,16 @@ package favorite
 import (
 	"context"
 	"database/sql"
-	"strings"
+	"errors"
 
 	"github.com/femi/golang-easyrent/internal/listing"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 )
+
+// pgForeignKeyViolation is the Postgres error code for a foreign-key
+// violation, used to turn a favorite of an unknown listing into 404.
+const pgForeignKeyViolation = "23503"
 
 type Store struct {
 	db *sql.DB
@@ -17,41 +22,13 @@ func NewStore(db *sql.DB) Store {
 	return Store{db: db}
 }
 
-const listingColumns = `l.id, l.landlord_id, l.title, l.description, l.price::text,
-	l.rooms, l.furnished, l.status, l.address,
-	ST_Y(l.location::geometry) AS latitude, ST_X(l.location::geometry) AS longitude,
-	l.created_at, l.updated_at`
-
-func scanListing(s scanner) (listing.Listing, error) {
-	var l listing.Listing
-	err := s.Scan(
-		&l.ID,
-		&l.LandlordID,
-		&l.Title,
-		&l.Description,
-		&l.Price,
-		&l.Rooms,
-		&l.Furnished,
-		&l.Status,
-		&l.Address,
-		&l.Latitude,
-		&l.Longitude,
-		&l.CreatedAt,
-		&l.UpdatedAt,
-	)
-	return l, err
-}
-
-type scanner interface {
-	Scan(dest ...any) error
-}
-
 func (s Store) Add(ctx context.Context, userID, listingID uuid.UUID) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO favorites (user_id, listing_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
 		userID, listingID)
 	if err != nil {
-		if strings.Contains(err.Error(), "violates foreign key") || strings.Contains(err.Error(), "23503") {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == pgForeignKeyViolation {
 			return listing.ErrListingNotFound
 		}
 		return err
@@ -79,7 +56,7 @@ func (s Store) List(ctx context.Context, userID uuid.UUID, page, limit int) (lis
 	offset := (page - 1) * limit
 
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT `+listingColumns+`
+		SELECT `+listing.Columns+`
 		FROM listings l
 		JOIN favorites f ON f.listing_id = l.id
 		WHERE f.user_id = $1
@@ -92,7 +69,7 @@ func (s Store) List(ctx context.Context, userID uuid.UUID, page, limit int) (lis
 
 	listings := []listing.Listing{}
 	for rows.Next() {
-		l, err := scanListing(rows)
+		l, err := listing.ScanListing(rows)
 		if err != nil {
 			return listing.Page{}, err
 		}
@@ -107,64 +84,8 @@ func (s Store) List(ctx context.Context, userID uuid.UUID, page, limit int) (lis
 		return listing.Page{}, err
 	}
 
-	favCounts := map[uuid.UUID]int64{}
-	covers := map[uuid.UUID]string{}
-	if len(listings) > 0 {
-		ids := make([]string, len(listings))
-		for i, l := range listings {
-			ids[i] = l.ID.String()
-		}
-
-		favRows, err := s.db.QueryContext(ctx, `
-			SELECT listing_id, COUNT(*)
-			FROM favorites
-			WHERE listing_id = ANY($1::uuid[])
-			GROUP BY listing_id`, ids)
-		if err != nil {
-			return listing.Page{}, err
-		}
-		for favRows.Next() {
-			var id uuid.UUID
-			var n int64
-			if err := favRows.Scan(&id, &n); err != nil {
-				favRows.Close()
-				return listing.Page{}, err
-			}
-			favCounts[id] = n
-		}
-		favRows.Close()
-		if err := favRows.Err(); err != nil {
-			return listing.Page{}, err
-		}
-
-		coverRows, err := s.db.QueryContext(ctx, `
-			SELECT DISTINCT ON (listing_id) listing_id, url
-			FROM listing_media
-			WHERE listing_id = ANY($1::uuid[])
-			ORDER BY listing_id, "order"`, ids)
-		if err != nil {
-			return listing.Page{}, err
-		}
-		for coverRows.Next() {
-			var id uuid.UUID
-			var url string
-			if err := coverRows.Scan(&id, &url); err != nil {
-				coverRows.Close()
-				return listing.Page{}, err
-			}
-			covers[id] = url
-		}
-		coverRows.Close()
-		if err := coverRows.Err(); err != nil {
-			return listing.Page{}, err
-		}
-	}
-
-	for i, l := range listings {
-		listings[i].FavoriteCount = favCounts[l.ID]
-		if url, ok := covers[l.ID]; ok {
-			listings[i].CoverImage = sql.NullString{String: url, Valid: true}
-		}
+	if err := listing.AttachListMeta(ctx, s.db, listings); err != nil {
+		return listing.Page{}, err
 	}
 
 	return listing.Page{

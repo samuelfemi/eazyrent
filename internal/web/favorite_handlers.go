@@ -6,7 +6,8 @@ import (
 	"github.com/google/uuid"
 )
 
-// pathFavoriteID parses the {id} path value for favorites (a listing id).
+// pathFavoriteID parses the {id} path value for favorites: since a favorite
+// is identified by its listing, this is the listing id parser.
 func pathFavoriteID(r *http.Request) (uuid.UUID, error) {
 	return pathListingID(r)
 }

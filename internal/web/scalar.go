@@ -1,7 +1,6 @@
 package web
 
 import (
-	"bytes"
 	"encoding/json"
 	"net/http"
 
@@ -12,7 +11,9 @@ import (
 var openapiSpec = docs.Spec
 
 // scalarPage is the Scalar API reference UI. It loads the spec from
-// /openapi.json served by openapiSpecHandler.
+// /openapi.json served by openapiSpecHandler. The CDN script is pinned to an
+// exact version and protected by a subresource-integrity hash so a compromised
+// or changed CDN payload cannot run on the docs page.
 const scalarPage = `<!doctype html>
 <html lang="en">
 <head>
@@ -22,7 +23,7 @@ const scalarPage = `<!doctype html>
 </head>
 <body>
 <script id="api-reference" data-url="/openapi.json"></script>
-<script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
+<script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference@1.75.0" integrity="sha384-xgelKlDcc+BYp0O+ZYzFesLnWCgGpEbXVVZWNQT6WyZYygN01tbEMygnjPXb5OPI" crossorigin="anonymous"></script>
 </body>
 </html>
 `
@@ -66,7 +67,7 @@ func specHostScheme(r *http.Request) (host, scheme string) {
 // rewriteSpecHost returns a copy of the Swagger 2.0 spec with host/schemes
 // set from the request. On any error it returns the raw spec unchanged.
 func rewriteSpecHost(raw []byte, host, scheme string) []byte {
-	if host == "" && (scheme != "https" && scheme != "http") {
+	if host == "" && scheme != "https" && scheme != "http" {
 		return raw
 	}
 	var spec map[string]any
@@ -83,10 +84,5 @@ func rewriteSpecHost(raw []byte, host, scheme string) []byte {
 	if err != nil {
 		return raw
 	}
-	// Keep parity with the checked-in swagger.json formatting style is not
-	// required; compact JSON is fine for Scalar. Ensure valid JSON output.
-	if !json.Valid(out) {
-		return raw
-	}
-	return bytes.Clone(out)
+	return out
 }

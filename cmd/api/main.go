@@ -44,7 +44,8 @@ func run() error {
 		return err
 	}
 
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	pool, err := db.Open(ctx, cfg.DatabaseURL)
 	if err != nil {
@@ -65,25 +66,65 @@ func run() error {
 		favorite.NewService(favorite.NewStore(pool)),
 		ratelimit.DefaultLimits(),
 	)
+	if cfg.TrustProxy {
+		handler.ClientIP = web.ForwardedIP
+	}
+
+	startTokenJanitor(ctx, authSvc)
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,
 		Handler:           handler.Routes(),
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
+	// ListenAndServe runs in the background; a bind failure must end the
+	// process instead of leaving it waiting on a signal forever.
+	serveErr := make(chan error, 1)
 	go func() {
 		log.Printf("listening on %s", cfg.Addr)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Printf("server error: %v", err)
+			serveErr <- err
 		}
 	}()
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
-	<-stop
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	select {
+	case err := <-serveErr:
+		return err
+	case <-stop:
+	}
+
+	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelShutdown()
 	return srv.Shutdown(shutdownCtx)
+}
+
+// startTokenJanitor periodically deletes expired refresh and password-reset
+// tokens so those tables do not grow without bound. It stops with ctx.
+func startTokenJanitor(ctx context.Context, svc auth.Service) {
+	go func() {
+		ticker := time.NewTicker(time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				refresh, reset, err := svc.Users.DeleteExpiredSessions(ctx)
+				if err != nil {
+					log.Printf("auth: token cleanup: %v", err)
+					continue
+				}
+				if refresh+reset > 0 {
+					log.Printf("auth: cleaned %d refresh and %d password-reset tokens", refresh, reset)
+				}
+			}
+		}
+	}()
 }
