@@ -19,7 +19,10 @@ func Open(ctx context.Context, databaseURL string) (*sql.DB, error) {
 	db.SetMaxIdleConns(5)
 	db.SetConnMaxLifetime(30 * time.Minute)
 
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	// 20s so the ping survives a cold start on managed Postgres like Neon,
+	// where the first connection may need to wake a suspended compute node;
+	// 5s made those cold starts fail with "ping database: timeout".
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 
 	if err := db.PingContext(ctx); err != nil {
